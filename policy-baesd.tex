@@ -1,0 +1,134 @@
+\documentclass{article}
+\usepackage{ctex} 
+\usepackage{amsmath, amssymb}
+\usepackage{geometry}
+\geometry{a4paper, margin=1in}
+
+\title{深度强化学习知识点复习（策略学习部分）}
+\author{本文档参照王树森深度强化学习进行补充整理}
+\begin{document}
+\maketitle
+
+\section{策略网络的架构与原理}
+策略网络 \(\pi(a|s;\theta)\) 是一个参数化的概率分布模型，通常用神经网络表示。其输入为状态 \(s\)，输出为动作的概率分布（对于离散动作空间，常用 Softmax 层输出各类别概率；对于连续动作空间，常用高斯分布输出均值和方差）。策略网络直接参数化智能体的行为策略，通过优化参数 \(\theta\) 以最大化累积期望回报。相比于基于价值的方法，策略网络可以自然地处理随机策略和高维/连续动作空间，且具有更好的收敛性保证，尤其在采用策略梯度方法时。
+
+\section{策略学习目标函数更新方式}
+策略学习的目标是最大化期望累积回报，定义目标函数：
+\[
+J(\theta) = \mathbb{E}_{\tau \sim p_\theta(\tau)} \left[ \sum_{t=0}^{T-1} \gamma^t r_t \right] \tag{1}
+\]
+其中 \(\tau = (s_0,a_0,r_1,s_1,\dots)\) 是由策略 \(\pi_\theta\) 生成的轨迹。参数更新采用梯度上升：
+\[
+\theta \leftarrow \theta + \alpha \nabla_\theta J(\theta) \tag{2}
+\]
+核心在于如何无偏估计梯度 \(\nabla_\theta J(\theta)\)，这由策略梯度定理解决。
+
+\section{策略梯度定理及其推导}
+策略梯度定理给出了目标函数梯度的简洁表达式：
+\[
+\nabla_\theta J(\theta) = \mathbb{E}_{\tau \sim \pi_\theta} \left[ \sum_{t=0}^{T-1} \nabla_\theta \log \pi_\theta(a_t|s_t) \cdot Q^{\pi_\theta}(s_t,a_t) \right] \tag{3}
+\]
+推导过程依赖以下引理：
+
+\textbf{引理（递推公式）}：对于任意策略 \(\pi_\theta\)，状态价值函数满足
+\[
+\nabla_\theta V^{\pi_\theta}(s) = \mathbb{E}_{a\sim\pi_\theta(\cdot|s)} \left[ \nabla_\theta \log \pi_\theta(a|s) Q^{\pi_\theta}(s,a) + \gamma \mathbb{E}_{s'\sim P(\cdot|s,a)} \left[ \nabla_\theta V^{\pi_\theta}(s') \right] \right] \tag{4}
+\]
+
+\textbf{引理（策略梯度的连加形式）}：递归展开 (4) 可得
+\[
+\nabla_\theta V^{\pi_\theta}(s) = \mathbb{E}_{\tau \sim \pi_\theta} \left[ \sum_{t=0}^{\infty} \nabla_\theta \log \pi_\theta(a_t|s_t) \cdot Q^{\pi_\theta}(s_t,a_t) \middle| s_0=s \right] \tag{5}
+\]
+
+\textbf{引理（马尔可夫链的稳态分布）}：对于无限长轨迹，目标函数可写作状态价值的期望：
+\[
+J(\theta) = \mathbb{E}_{s \sim d^{\pi_\theta}(s)} \left[ V^{\pi_\theta}(s) \right] \tag{6}
+\]
+其中 \(d^{\pi_\theta}(s)\) 是策略 \(\pi_\theta\) 下的折扣状态分布。将 (5) 代入并对 \(s\) 按该分布取期望，即得策略梯度定理 (3)。
+
+\section{近似策略梯度原理及推导}
+在实际计算中，真实动作价值 \(Q^{\pi_\theta}\) 未知，需用估计值代替，例如使用蒙特卡洛采样回报 \(G_t\) 或由价值网络 \(Q_w\) 估计。构造随机梯度：
+\[
+\hat{g} = \sum_t \nabla_\theta \log \pi_\theta(a_t|s_t) \cdot \hat{Q}_t \tag{7}
+\]
+其中 \(\hat{Q}_t\) 是 \(Q^{\pi_\theta}(s_t,a_t)\) 的估计。若 \(\hat{Q}_t\) 满足 \(\mathbb{E}[\hat{Q}_t | s_t,a_t] = Q^{\pi_\theta}(s_t,a_t)\)，则 \(\mathbb{E}[\hat{g}] = \nabla_\theta J(\theta)\)，即随机梯度是策略梯度的无偏估计。常见的无偏估计包括单步回报 \(G_t\) 和带基线的优势估计。
+
+\section{REINFORCE算法原理及推导}
+REINFORCE 使用蒙特卡洛采样的完整回报 \(G_t = \sum_{k=t}^{T-1} \gamma^{k-t} r_{k+1}\) 作为 \(Q^{\pi_\theta}(s_t,a_t)\) 的无偏估计，代入 (3) 得：
+\[
+\nabla_\theta J(\theta) \approx \sum_{t=0}^{T-1} G_t \nabla_\theta \log \pi_\theta(a_t|s_t) \tag{8}
+\]
+由于 \(G_t\) 必须由当前策略 \(\pi_\theta\) 生成的完整轨迹计算得到，因此 REINFORCE 是\textbf{同策略}方法，不能使用经验回放（否则 \(G_t\) 对应旧策略，不再是无偏估计）。为降低方差，常引入基线 \(b(s_t)\)，将 \(G_t\) 替换为 \(G_t - b(s_t)\)，基线可用状态价值网络学习。
+
+\section{REINFORCE算法训练框架}
+训练流程如下：
+\begin{enumerate}
+    \item 初始化策略网络参数 \(\theta\)。
+    \item 对于每个回合（episode）：
+    \begin{enumerate}
+        \item 使用当前策略 \(\pi_\theta\) 生成一条完整轨迹 \(\{s_0,a_0,r_1,s_1,\dots,s_{T-1},a_{T-1},r_T\}\)。
+        \item 对于每个时间步 \(t = 0,\dots,T-1\)，计算折扣累积回报 \(G_t = \sum_{k=t}^{T-1} \gamma^{k-t} r_{k+1}\)。
+        \item 计算策略梯度估计：\(\nabla_\theta J \approx \sum_t G_t \nabla_\theta \log \pi_\theta(a_t|s_t)\)。
+        \item 更新参数：\(\theta \leftarrow \theta + \alpha \nabla_\theta J\)。
+    \end{enumerate}
+    \item 重复直到收敛。
+\end{enumerate}
+实际实现中常引入基线网络 \(V_\phi(s)\) 并通过蒙特卡洛或TD学习更新，将 \(G_t\) 替换为优势估计 \(G_t - V_\phi(s_t)\)。
+
+\section{价值网络与DQN结构的异同点}
+\begin{itemize}
+    \item \textbf{结构相同}：价值网络 \(Q(s,a;w)\) 与 DQN 的 Q 网络在结构上完全一致，均为输入状态-动作对（或状态）输出动作价值的神经网络。
+    \item \textbf{目标不同}：价值网络近似的是\textbf{特定策略} \(\pi\) 的动作价值函数 \(Q^\pi(s,a)\)（用于策略评价）；而 DQN 近似的是\textbf{最优}动作价值函数 \(Q^*(s,a)\)。
+    \item \textbf{训练方式不同}：价值网络通常采用 SARSA 算法更新，属于同策略，不能使用经验回放（若需重用数据必须结合重要性采样）；DQN 采用 Q 学习算法更新，属于异策略，可以配合经验回放提高样本效率。
+\end{itemize}
+
+\section{actor-critic算法推导}
+Actor-Critic 结合策略梯度（Actor）与价值函数（Critic）。Critic 用参数 \(w\) 近似动作价值 \(Q_w(s,a)\)，用于指导 Actor 更新。策略梯度公式变为：
+\[
+\nabla_\theta J(\theta) \approx \mathbb{E}_{s \sim d^{\pi_\theta}, a \sim \pi_\theta} \left[ \nabla_\theta \log \pi_\theta(a|s) \cdot Q_w(s,a) \right] \tag{9}
+\]
+Critic 的更新基于贝尔曼方程（如 SARSA）：
+\[
+\delta_t = r_{t+1} + \gamma Q_w(s_{t+1},a_{t+1}) - Q_w(s_t,a_t) \tag{10}
+\]
+\[
+w \leftarrow w + \beta \delta_t \nabla_w Q_w(s_t,a_t) \tag{11}
+\]
+两者交替更新。为降低方差，常引入优势函数 \(A(s,a)=Q(s,a)-V(s)\)，并用 TD 误差 \(\delta_t\) 作为优势的无偏估计，此时 Actor 更新为：
+\[
+\theta \leftarrow \theta + \alpha \delta_t \nabla_\theta \log \pi_\theta(a_t|s_t) \tag{12}
+\]
+
+\section{actor-critic算法训练框架}
+一个典型的同策略 Actor-Critic 训练流程（使用 SARSA 更新 Critic）：
+\begin{enumerate}
+    \item 初始化 Actor 网络 \(\pi_\theta\) 和 Critic 网络 \(Q_w\)（或 \(V_w\)），设置学习率 \(\alpha, \beta\)。
+    \item 对于每个时间步 \(t\)：
+    \begin{enumerate}
+        \item 根据当前策略 \(\pi_\theta(\cdot|s_t)\) 采样动作 \(a_t\)，与环境交互得到 \(r_{t+1}, s_{t+1}\)。
+        \item 根据当前策略采样下一动作 \(a_{t+1} \sim \pi_\theta(\cdot|s_{t+1})\)（若使用 SARSA）。
+        \item 计算 TD 误差：\(\delta = r_{t+1} + \gamma Q_w(s_{t+1},a_{t+1}) - Q_w(s_t,a_t)\)。
+        \item 更新 Critic：\(w \leftarrow w + \beta \delta \nabla_w Q_w(s_t,a_t)\)。
+        \item 更新 Actor：\(\theta \leftarrow \theta + \alpha \delta \nabla_\theta \log \pi_\theta(a_t|s_t)\)。
+        \item 转移：\(s_t \leftarrow s_{t+1}, a_t \leftarrow a_{t+1}\)。
+    \end{enumerate}
+    \item 重复直到收敛。
+\end{enumerate}
+现代算法如 A2C（Advantage Actor-Critic）使用多步回报和并行环境，PPO 引入信任域约束，但核心框架均源于此。
+
+\subsection{自然策略梯度与普通策略梯度的区别}
+普通策略梯度在参数空间中使用欧氏距离进行更新，对策略的参数化方式敏感，容易导致更新步长在分布空间中的不一致，影响收敛稳定性。自然策略梯度引入策略分布空间的黎曼度量，使用 Fisher 信息矩阵 \(F_\theta\) 修正梯度方向：
+\[
+\tilde{\nabla}_\theta J = F_\theta^{-1} \nabla_\theta J, \quad F_\theta = \mathbb{E}_{s,a} \left[ \nabla_\theta \log \pi_\theta(a|s) \nabla_\theta \log \pi_\theta(a|s)^\top \right] \tag{13}
+\]
+其推导基于在 KL 散度约束 \(\text{KL}(\pi_\theta \| \pi_{\theta+\Delta\theta}) = \epsilon\) 下最大化目标函数，通过泰勒展开得到自然梯度。自然梯度具有参数化不变性，能保证每次更新在策略分布空间中的步长恒定，从而收敛更稳定，并为 TRPO、PPO 等算法提供了理论基础。
+
+
+
+
+
+
+
+
+
+\end{document}
