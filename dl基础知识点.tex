@@ -1,0 +1,990 @@
+\documentclass[UTF8, 10pt]{ctexart}
+\usepackage{amsmath, amssymb, amsthm, bm, graphicx}
+\usepackage{geometry}
+\geometry{a4paper, left=2.5cm, right=2.5cm, top=2.5cm, bottom=2.5cm}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{mathtools}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric, calc}
+
+% 定理环境
+\newtheorem{theorem}{定理}[section]
+\newtheorem{lemma}[theorem]{引理}
+\newtheorem{corollary}[theorem]{推论}
+\newtheorem{definition}{定义}[section]
+\newtheorem{proposition}[theorem]{命题}
+\newtheorem{example}{例}[section]
+\newtheorem{remark}{注}[section]
+
+% 自定义命令
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\Cov}{\operatorname{Cov}}
+\newcommand{\tr}{\operatorname{tr}}
+\newcommand{\diag}{\operatorname{diag}}
+\newcommand{\rank}{\operatorname{rank}}
+\newcommand{\KL}{\operatorname{KL}}
+\newcommand{\vect}{\operatorname{vec}}
+
+% 超链接设置
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,
+    urlcolor=cyan,
+    citecolor=green
+}
+
+\title{\textbf{深度学习进阶面试笔记}}
+\author{根据深度学习花书整理}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+\section{广播机制}
+\subsection{数学本质}
+\begin{definition}[广播兼容性]
+广播(Broadcasting)是NumPy、PyTorch等张量库中用于形状不同数组之间逐元素运算的机制。设张量 $\bm{A}$ 和 $\bm{B}$ 的形状分别为 $\bm{s}_A = (d_1^A, d_2^A, \ldots, d_m^A)$ 和 $\bm{s}_B = (d_1^B, d_2^B, \ldots, d_n^B)$，则它们可广播当且仅当：从尾部维度开始对齐后，每个对应维度满足以下条件之一：
+\begin{enumerate}
+    \item 两维度长度相等，即 $d_i^A = d_i^B$；
+    \item 其中之一为1，即 $d_i^A = 1$ 或 $d_i^B = 1$；
+    \item 其中之一缺失（视为1）。
+\end{enumerate}
+\end{definition}
+
+\begin{theorem}[广播等价表示]
+若张量 $\bm{A} \in \R^{m \times n}$ 与向量 $\bm{b} \in \R^{n}$ 可广播，则存在等价表示：
+\[
+\bm{A} + \bm{b} = \bm{A} + \bm{1}_{m \times 1} \cdot \bm{b}^T
+\]
+其中 $\bm{1}_{m \times 1}$ 为全1列向量，$\bm{b}$ 被逻辑复制 $m$ 行。
+\end{theorem}
+
+\begin{proof}
+设 $\bm{A} = [a_{ij}]$，$\bm{b} = [b_j]$，则 $(\bm{A} + \bm{b})_{ij} = a_{ij} + b_j$。另一方面：
+\[
+(\bm{1}_{m \times 1} \cdot \bm{b}^T)_{ij} = \sum_k (1)_{ik} (b^T)_{kj} = b_j
+\]
+故 $(\bm{A} + \bm{1}_{m \times 1} \cdot \bm{b}^T)_{ij} = a_{ij} + b_j$，与广播结果一致。
+\end{proof}
+
+\subsection{工程易错点}
+\begin{itemize}
+    \item \textbf{维度理解错误}：形状为 $(3,)$ 的向量被视为 $(1,3)$，与 $(3,1)$ 矩阵相加得到 $(3,3)$，而非报错。
+    \item \textbf{内存与性能}：广播通过步长(stride)实现逻辑扩展，不占用额外内存，但若后续运算涉及大维度扩张（如将 $(1,1000)$ 广播到 $(10000,1000)$），仍会导致大量计算，需注意内存带宽。
+    \item \textbf{自动微分}：广播的反向传播需对广播维度进行求和。设 $\bm{y} = \bm{x} + \bm{b}$，其中 $\bm{x} \in \R^{m \times n}$，$\bm{b} \in \R^n$，则：
+    \[
+    \frac{\partial L}{\partial \bm{b}} = \sum_{i=1}^{m} \left( \frac{\partial L}{\partial \bm{y}} \right)_{i,:}
+    \]
+    这是因为前向传播中 $\bm{b}$ 被复制了 $m$ 次，反向传播需累加梯度贡献。
+\end{itemize}
+
+\begin{theorem}[广播反向传播规则]
+设张量 $\bm{X} \in \R^{d_1 \times \cdots \times d_k}$ 通过广播得到 $\bm{Y} \in \R^{d_1' \times \cdots \times d_k'}$（其中部分维度 $d_i = 1$ 被扩展为 $d_i'$），则反向传播时：
+\[
+\frac{\partial L}{\partial \bm{X}} = \text{reshape}\left(\sum_{\text{broadcast dims}} \frac{\partial L}{\partial \bm{Y}}, \bm{X}\text{'s shape}\right)
+\]
+\end{theorem}
+
+\subsection{前沿应用}
+在Transformer中，多头注意力的偏置项常通过广播加到每个头的输出上。此外，混合精度训练中需注意广播导致的数值范围变化。
+
+\section{正交矩阵的行向量标准正交性}
+\subsection{数学推导}
+\begin{definition}[正交矩阵]
+若矩阵 $\bm{Q} \in \R^{n \times n}$ 满足 $\bm{Q}^T \bm{Q} = \bm{I}$，则称 $\bm{Q}$ 为正交矩阵。
+\end{definition}
+
+\begin{theorem}[正交矩阵的行列正交性]
+若 $\bm{Q}$ 为正交矩阵，则：
+\begin{enumerate}
+    \item $\bm{Q}$ 可逆且 $\bm{Q}^{-1} = \bm{Q}^T$；
+    \item $\bm{Q} \bm{Q}^T = \bm{I}$，即行向量也标准正交；
+    \item $|\det(\bm{Q})| = 1$。
+\end{enumerate}
+\end{theorem}
+
+\begin{proof}
+由 $\bm{Q}^T \bm{Q} = \bm{I}$，根据行列式性质：
+\[
+\det(\bm{Q}^T \bm{Q}) = \det(\bm{Q}^T) \det(\bm{Q}) = \det(\bm{Q})^2 = \det(\bm{I}) = 1
+\]
+故 $\det(\bm{Q}) = \pm 1 \neq 0$，$\bm{Q}$ 可逆。左乘 $\bm{Q}^{-1}$ 得 $\bm{Q}^T = \bm{Q}^{-1}$，故 $\bm{Q} \bm{Q}^T = \bm{Q} \bm{Q}^{-1} = \bm{I}$。
+\end{proof}
+
+\begin{remark}
+正交矩阵的行向量与列向量均构成 $\R^n$ 的标准正交基。
+\end{remark}
+
+\subsection{工程细节}
+\begin{proposition}[非方阵的正交性]
+对于非方阵 $\bm{U} \in \R^{m \times n}$（假设 $m > n$），若满足 $\bm{U}^T \bm{U} = \bm{I}_n$，则：
+\begin{enumerate}
+    \item 列向量标准正交；
+    \item $\bm{U} \bm{U}^T \neq \bm{I}_m$，行向量不一定正交；
+    \item $\bm{U}$ 是等距映射，保持向量范数：$\|\bm{U}\bm{x}\|_2 = \|\bm{x}\|_2$。
+\end{enumerate}
+\end{proposition}
+
+\begin{theorem}[正交矩阵的数值稳定性]
+正交矩阵 $\bm{Q}$ 的2-范数条件数 $\kappa_2(\bm{Q}) = 1$，故乘法运算不放大误差：
+\[
+\frac{\|\delta \bm{y}\|}{\|\bm{y}\|} \le \kappa(\bm{Q}) \frac{\|\delta \bm{x}\|}{\|\bm{x}\|} = \frac{\|\delta \bm{x}\|}{\|\bm{x}\|}
+\]
+\end{theorem}
+
+\subsection{实践与前沿}
+\begin{itemize}
+    \item \textbf{正交初始化}：RNN中权重矩阵初始化为正交矩阵可缓解梯度消失/爆炸。实现时可用QR分解对随机高斯矩阵分解得到正交基。
+    \item \textbf{神经网络正交性}：近期研究（如Orthogonal Regularization）在训练中施加正交约束，可提高模型泛化性和鲁棒性。
+\end{itemize}
+
+\section{矩阵的特征分解与实对称矩阵}
+\subsection{谱定理}
+\begin{theorem}[谱定理]
+设 $\bm{A} \in \R^{n \times n}$ 为实对称矩阵，则 $\bm{A}$ 可正交对角化：
+\[
+\bm{A} = \bm{Q} \bm{\Lambda} \bm{Q}^T,\quad \bm{Q}^T\bm{Q}=\bm{I},\ \bm{\Lambda}=\diag(\lambda_1,\dots,\lambda_n),\ \lambda_i \in \R.
+\]
+其中 $\lambda_1, \ldots, \lambda_n$ 为 $\bm{A}$ 的特征值，$\bm{Q}$ 的列为对应的正交特征向量。
+\end{theorem}
+
+\begin{theorem}[实对称矩阵的性质]
+设 $\bm{A} \in \R^{n \times n}$ 为实对称矩阵，则：
+\begin{enumerate}
+    \item 所有特征值均为实数；
+    \item 不同特征值对应的特征向量正交；
+    \item $\bm{A}$ 的正惯性指数等于正特征值个数，负惯性指数等于负特征值个数。
+\end{enumerate}
+\end{theorem}
+
+\subsection{证明思路}
+\begin{proof}[谱定理证明要点]
+\begin{enumerate}
+    \item \textbf{特征值为实数}：设 $\bm{A}\bm{v} = \lambda \bm{v}$，$\bm{v} \neq 0$。取共轭转置：
+    \[
+    \bar{\lambda}\bar{\bm{v}}^T\bm{v} = (\bm{A}\bm{v})^H \bm{v} = \bm{v}^H \bm{A}^H \bm{v} = \bm{v}^H \bm{A} \bm{v} = \lambda \bm{v}^H \bm{v}
+    \]
+    由 $\bm{v}^H \bm{v} > 0$ 得 $\bar{\lambda} = \lambda$，故 $\lambda \in \R$。
+    \item \textbf{特征向量正交}：设 $\bm{A}\bm{v}_1 = \lambda_1 \bm{v}_1$，$\bm{A}\bm{v}_2 = \lambda_2 \bm{v}_2$，$\lambda_1 \neq \lambda_2$。则：
+    \[
+    \lambda_1 \bm{v}_1^T \bm{v}_2 = (\bm{A}\bm{v}_1)^T \bm{v}_2 = \bm{v}_1^T \bm{A}^T \bm{v}_2 = \bm{v}_1^T \bm{A} \bm{v}_2 = \lambda_2 \bm{v}_1^T \bm{v}_2
+    \]
+    因 $\lambda_1 \neq \lambda_2$，故 $\bm{v}_1^T \bm{v}_2 = 0$。
+    \item \textbf{Schur分解}：通过Schur分解 $\bm{A} = \bm{Q} \bm{T} \bm{Q}^T$（$\bm{T}$ 为上三角），由对称性得 $\bm{T} = \bm{T}^T$，故 $\bm{T}$ 为对角矩阵。
+\end{enumerate}
+\end{proof}
+
+\subsection{工程易错}
+\begin{itemize}
+    \item 数值求解特征值常用QR算法，对病态矩阵需注意精度。
+    \item 特征值分解仅对方阵定义，SVD则适用于任意矩阵。
+\end{itemize}
+
+\subsection{前沿}
+Hessian矩阵的特征值分布揭示了损失景观的曲率。例如，在神经网络中，Hessian的最大特征值远大于最小特征值，导致病态，需用自适应优化器（如Adam）缓解。
+
+\section{奇异值分解}
+\subsection{定义与几何意义}
+\begin{theorem}[奇异值分解]
+任意矩阵 $\bm{A} \in \R^{m \times n}$（秩为 $r$）可分解为：
+\[
+\bm{A} = \bm{U} \bm{\Sigma} \bm{V}^T = \sum_{i=1}^{r} \sigma_i \bm{u}_i \bm{v}_i^T
+\]
+其中：
+\begin{itemize}
+    \item $\bm{U} \in \R^{m \times m}$ 为左奇异向量矩阵，正交；
+    \item $\bm{V} \in \R^{n \times n}$ 为右奇异向量矩阵，正交；
+    \item $\bm{\Sigma} \in \R^{m \times n}$ 为对角矩阵，奇异值 $\sigma_1 \ge \sigma_2 \ge \cdots \ge \sigma_r > 0$，$\sigma_{r+1} = \cdots = \sigma_{\min(m,n)} = 0$。
+\end{itemize}
+\end{theorem}
+
+\begin{remark}[几何解释]
+SVD将线性变换分解为三个步骤：
+\begin{enumerate}
+    \item $\bm{V}^T$：在输入空间旋转，将输入映射到奇异向量方向；
+    \item $\bm{\Sigma}$：沿各主方向缩放，$\sigma_i$ 为第 $i$ 个主方向的拉伸因子；
+    \item $\bm{U}$：在输出空间旋转。
+\end{enumerate}
+因此，SVD揭示了线性变换的本质几何结构。
+\end{remark}
+
+\subsection{与特征分解的关系}
+\begin{theorem}[SVD与特征值的关系]
+设 $\bm{A} = \bm{U} \bm{\Sigma} \bm{V}^T$ 为 $\bm{A}$ 的SVD，则：
+\begin{align*}
+    \bm{A}^T\bm{A} &= \bm{V} \bm{\Sigma}^T \bm{\Sigma} \bm{V}^T \quad \text{（特征值 } \sigma_i^2\text{，特征向量构成 }\bm{V}\text{）}\\
+    \bm{A}\bm{A}^T &= \bm{U} \bm{\Sigma} \bm{\Sigma}^T \bm{U}^T \quad \text{（特征值 } \sigma_i^2\text{，特征向量构成 }\bm{U}\text{）}
+\end{align*}
+\end{theorem}
+
+\begin{corollary}[低秩近似]
+设 $\bm{A}$ 的秩为 $r$，取前 $k < r$ 个奇异值，则Eckart-Young定理保证：
+\[
+\bm{A}_k = \sum_{i=1}^{k} \sigma_i \bm{u}_i \bm{v}_i^T = \arg\min_{\rank(\bm{B}) \le k} \|\bm{A} - \bm{B}\|_F
+\]
+\end{corollary}
+
+\subsection{工程易错}
+\begin{itemize}
+    \item 计算 $\bm{A}^T\bm{A}$ 再求特征分解可能丢失精度（平方导致动态范围扩大），直接用SVD更稳定。
+    \item 截断SVD在降维中需注意保留的奇异值个数，常用能量阈值（如保留90\%方差）。
+\end{itemize}
+
+\subsection{前沿应用}
+\begin{itemize}
+    \item 低秩近似压缩模型：将权重矩阵 $\bm{W}$ 近似为 $\bm{U}_k \bm{\Sigma}_k \bm{V}_k^T$，减少参数量。
+    \item 推荐系统中的矩阵分解（如FunkSVD）。
+    \item 神经网络可解释性：通过SVD分析特征表示的主方向，发现语义概念。
+\end{itemize}
+
+\section{Moore-Penrose伪逆}
+\subsection{定义与SVD形式}
+\begin{definition}[Moore-Penrose伪逆]
+对于任意矩阵 $\bm{A} \in \R^{m \times n}$，其伪逆 $\bm{A}^+ \in \R^{n \times m}$ 是唯一满足以下Penrose条件的矩阵：
+\begin{align}
+    \bm{A} \bm{A}^+ \bm{A} &= \bm{A} \label{eq:p1}\\
+    \bm{A}^+ \bm{A} \bm{A}^+ &= \bm{A}^+ \label{eq:p2}\\
+    (\bm{A} \bm{A}^+)^T &= \bm{A} \bm{A}^+ \label{eq:p3}\\
+    (\bm{A}^+ \bm{A})^T &= \bm{A}^+ \bm{A} \label{eq:p4}
+\end{align}
+\end{definition}
+
+\begin{theorem}[伪逆的SVD计算]
+设 $\bm{A} = \bm{U} \bm{\Sigma} \bm{V}^T$ 为SVD，则：
+\[
+\bm{A}^+ = \bm{V} \bm{\Sigma}^+ \bm{U}^T
+\]
+其中 $\bm{\Sigma}^+$ 将非零奇异值取倒数并转置：$(\bm{\Sigma}^+)_{ii} = 1/\sigma_i$ 若 $\sigma_i > 0$，否则为 $0$。
+\end{theorem}
+
+\subsection{几何意义与性质}
+\begin{theorem}[伪逆的特殊情况]
+\begin{enumerate}
+    \item 若 $\bm{A}$ 列满秩（$\rank(\bm{A}) = n$），则 $\bm{A}^+ = (\bm{A}^T\bm{A})^{-1}\bm{A}^T$（左逆），方程 $\bm{A}\bm{x} = \bm{b}$ 的最小二乘解为 $\bm{x}^* = \bm{A}^+\bm{b}$。
+    \item 若 $\bm{A}$ 行满秩（$\rank(\bm{A}) = m$），则 $\bm{A}^+ = \bm{A}^T(\bm{A}\bm{A}^T)^{-1}$（右逆），给出最小范数解。
+    \item 若 $\bm{A}$ 可逆，则 $\bm{A}^+ = \bm{A}^{-1}$。
+\end{enumerate}
+\end{theorem}
+
+\begin{theorem}[最小范数最小二乘解]
+对于线性系统 $\bm{A}\bm{x} = \bm{b}$（可能无解或有无穷多解），$\bm{x}^* = \bm{A}^+ \bm{b}$ 满足：
+\[
+\bm{x}^* = \arg\min_{\bm{x}} \|\bm{A}\bm{x} - \bm{b}\|_2, \quad \text{且 } \bm{x}^* = \arg\min_{\bm{x} \in S} \|\bm{x}\|_2
+\]
+其中 $S = \{\bm{x} : \|\bm{A}\bm{x} - \bm{b}\|_2 \text{ 最小}\}$。
+\end{theorem}
+
+\subsection{工程易错}
+\begin{itemize}
+    \item 在求解线性系统时，若 $\bm{A}$ 接近奇异，直接使用伪逆可能放大噪声，需正则化（如Tikhonov）。
+    \item 实际计算中常用奇异值截断（truncated SVD）来处理秩亏情况。
+\end{itemize}
+
+\subsection{前沿}
+在神经网络中，伪逆用于解耦权重矩阵的分析（如解耦表示学习中的特征）。此外，在优化中，伪逆可用于计算自然梯度（通过Fisher信息矩阵的伪逆）。
+
+\section{主成分分析}
+\subsection{数学推导}
+设中心化数据矩阵 $\bm{X} \in \R^{n \times d}$（样本数为 $n$，特征维度为 $d$），样本协方差矩阵为 $\bm{S} = \frac{1}{n}\bm{X}^T\bm{X}$。
+
+\begin{theorem}[PCA的最大方差推导]
+寻找投影方向 $\bm{w} \in \R^d$（$\|\bm{w}\|_2 = 1$）使得投影后方差最大：
+\[
+\max_{\bm{w}} \bm{w}^T \bm{S} \bm{w}, \quad \text{s.t. } \|\bm{w}\|_2 = 1
+\]
+由拉格朗日乘子法，构造 $\mathcal{L}(\bm{w}, \lambda) = \bm{w}^T \bm{S} \bm{w} - \lambda(\bm{w}^T\bm{w} - 1)$。令 $\nabla_{\bm{w}} \mathcal{L} = 0$ 得：
+\[
+\bm{S}\bm{w} = \lambda \bm{w}
+\]
+故最优投影方向为 $\bm{S}$ 的最大特征值对应的特征向量，投影方差为 $\lambda_1$。
+\end{theorem}
+
+\begin{theorem}[PCA的最小重构误差推导]
+将数据投影到 $k$ 维子空间后重构，最小化重构误差：
+\[
+\min_{\bm{W}} \|\bm{X} - \bm{X}\bm{W}\bm{W}^T\|_F^2, \quad \text{s.t. } \bm{W}^T\bm{W} = \bm{I}_k
+\]
+最优解为 $\bm{W} = [\bm{v}_1, \ldots, \bm{v}_k]$，即协方差矩阵前 $k$ 大特征值对应的特征向量。
+\end{theorem}
+
+\subsection{工程易错}
+\begin{itemize}
+    \item 未标准化：若特征量纲不同，PCA受量纲影响，应使用相关矩阵（标准化后协方差）。
+    \item 特征值占比解释方差，但选择 $k$ 时需结合业务理解，不能仅靠阈值。
+    \item PCA对离群点敏感，可用鲁棒PCA（如使用1范数）。
+\end{itemize}
+
+\subsection{前沿}
+\begin{itemize}
+    \item \textbf{概率PCA}：引入潜变量模型，可用EM算法处理缺失值。
+    \item \textbf{核PCA}：通过核技巧捕捉非线性结构，但解释性下降。
+    \item \textbf{深度PCA}：将PCA扩展为深度网络（如自编码器），但需注意过完备表示。
+\end{itemize}
+
+\section{Multinoulli分布}
+\subsection{定义}
+\begin{definition}[Multinoulli分布]
+Multinoulli分布（又称范畴分布）描述单次试验中 $K$ 个互斥类别的概率。设随机变量 $\bm{x} \in \{0,1\}^K$ 为one-hot向量，概率质量函数为：
+\[
+P(\bm{x}) = \prod_{k=1}^K p_k^{x_k},\quad \bm{x} \in \{0,1\}^K,\ \sum_{k=1}^K x_k = 1,\ \sum_{k=1}^K p_k = 1,\ p_k \ge 0.
+\]
+\end{definition}
+
+\begin{proposition}[Multinoulli的统计量]
+设 $\bm{x} \sim \text{Multinoulli}(\bm{p})$，其中 $\bm{p} = (p_1, \ldots, p_K)$，则：
+\begin{align*}
+    \E[x_k] &= p_k \\
+    \Var(x_k) &= p_k(1 - p_k) \\
+    \Cov(x_i, x_j) &= -p_i p_j \quad (i \neq j)
+\end{align*}
+\end{proposition}
+
+\subsection{与多项分布的关系}
+多项分布是 $n$ 次独立试验的计数结果，Multinoulli是 $n=1$ 的特例。
+
+\subsection{深度学习应用}
+\begin{theorem}[Softmax与Multinoulli的关系]
+在多分类问题中，设真实标签 $y \in \{1, \ldots, K\}$，神经网络输出logits $\bm{z} \in \R^K$，softmax函数将logits转换为概率：
+\[
+p_k = \frac{e^{z_k}}{\sum_{j=1}^K e^{z_j}}
+\]
+对于标签 $y$，其对数似然为：
+\[
+\log P(y|\bm{z}) = \log p_y = z_y - \log\sum_{j=1}^K e^{z_j}
+\]
+交叉熵损失即为负对数似然：$L = -\log P(y|\bm{z}) = -z_y + \log\sum_j e^{z_j}$。
+\end{theorem}
+
+\subsection{前沿技巧}
+\begin{itemize}
+    \item \textbf{Gumbel-Softmax}：用于从离散分布中采样并保持可微，在VAE中处理离散潜变量。
+    \item \textbf{标签平滑}：将硬目标 $y$ 替换为 $(1-\epsilon)$ 的概率加上 $\epsilon/K$，防止过拟合，提升泛化。
+\end{itemize}
+
+\section{参数化分布的精度控制}
+\subsection{指数族视角}
+\begin{definition}[指数族分布]
+若概率分布可表示为以下形式，则称其属于指数族：
+\[
+p(\bm{x}|\bm{\eta}) = h(\bm{x})\exp\big(\bm{\eta}^T T(\bm{x}) - A(\bm{\eta})\big)
+\]
+其中：
+\begin{itemize}
+    \item $\bm{\eta}$：自然参数（natural parameter），控制分布形状；
+    \item $T(\bm{x})$：充分统计量（sufficient statistic）；
+    \item $A(\bm{\eta})$：对数配分函数（log-partition function），保证概率归一化；
+    \item $h(\bm{x})$：基础测度（base measure）。
+\end{itemize}
+\end{definition}
+
+\begin{example}[正态分布的指数族形式]
+设 $X \sim \mathcal{N}(\mu, \sigma^2)$，则：
+\[
+p(x|\mu,\sigma^2) = \frac{1}{\sqrt{2\pi\sigma^2}} \exp\left(-\frac{(x-\mu)^2}{2\sigma^2}\right) = \exp\left(\frac{\mu}{\sigma^2} x - \frac{1}{2\sigma^2} x^2 - \frac{\mu^2}{2\sigma^2} - \frac{1}{2}\log(2\pi\sigma^2)\right)
+\]
+自然参数为 $\bm{\eta} = (\eta_1, \eta_2) = \left(\frac{\mu}{\sigma^2}, -\frac{1}{2\sigma^2}\right)$，精度为 $\tau = -2\eta_2 = \frac{1}{\sigma^2}$。
+\end{example}
+
+\begin{theorem}[对数配分函数的性质]
+$A(\bm{\eta})$ 的梯度给出充分统计量的期望，Hessian给出协方差：
+\[
+\nabla_{\bm{\eta}} A(\bm{\eta}) = \E[T(\bm{x})], \quad \nabla^2_{\bm{\eta}} A(\bm{\eta}) = \Var(T(\bm{x}))
+\]
+\end{theorem}
+
+\subsection{工程实践}
+在深度生成模型中，常用神经网络输出分布的参数，如VAE中解码器输出均值和对数方差，用 $\log\sigma^2$ 保证方差为正且数值稳定。这相当于用自然参数表示，便于计算KL散度。
+
+\subsection{易错点}
+直接输出方差而非对数方差可能导致训练不稳定（方差需为正，但神经网络输出无界）。使用softplus或exp激活可保证正数，但exp可能导致梯度爆炸，故常用对数方差。
+
+\section{Laplace分布}
+\subsection{定义与性质}
+\begin{definition}[Laplace分布]
+Laplace分布（双指数分布）的概率密度函数为：
+\[
+f(x|\mu,b) = \frac{1}{2b}\exp\left(-\frac{|x-\mu|}{b}\right),\quad b > 0
+\]
+其中 $\mu$ 为位置参数，$b$ 为尺度参数。
+\end{definition}
+
+\begin{proposition}[Laplace分布的统计量]
+\begin{align*}
+    \E[X] &= \mu \\
+    \Var(X) &= 2b^2 \\
+    \text{峰度} &= 3 \quad \text{（正态分布峰度为0，Laplace更厚尾）}
+\end{align*}
+\end{proposition}
+
+\begin{remark}[与正态分布的比较]
+相比正态分布，Laplace分布具有：
+\begin{itemize}
+    \item 更尖锐的峰值；
+    \item 更厚的尾部（kurtosis > 0）；
+    \item 在原点处不可微。
+\end{itemize}
+\end{remark}
+
+\subsection{与正则化的联系}
+\begin{theorem}[Laplace先验与L1正则化的等价性]
+在贝叶斯线性回归中，设似然 $p(\bm{y}|\bm{X}, \bm{w}) = \mathcal{N}(\bm{X}\bm{w}, \sigma^2\bm{I})$，若对参数施加Laplace先验 $p(\bm{w}) = \prod_j \frac{\lambda}{2} e^{-\lambda |w_j|}$，则MAP估计为：
+\[
+\bm{w}_{\text{MAP}} = \arg\min_{\bm{w}} \frac{1}{2\sigma^2}\|\bm{y} - \bm{X}\bm{w}\|_2^2 + \lambda \sum_j |w_j|
+\]
+这等价于L1正则化（LASSO），导致稀疏解。
+\end{theorem}
+
+\begin{proof}
+负对数后验为：
+\[
+-\log p(\bm{w}|\bm{X}, \bm{y}) \propto \frac{1}{2\sigma^2}\|\bm{y} - \bm{X}\bm{w}\|_2^2 + \lambda \|\bm{w}\|_1 + \text{const}
+\]
+最小化即得LASSO目标。
+\end{proof}
+
+\subsection{工程易错}
+\begin{itemize}
+    \item 最大似然估计中，Laplace分布的参数估计无闭式解，需数值优化。
+    \item 在深度学习中，Laplace分布可用于建模重尾噪声（如对抗性扰动）。
+\end{itemize}
+
+\subsection{前沿}
+在贝叶斯深度学习不确定性量化中，可用Laplace分布近似后验（Laplace近似），通过Hessian矩阵得到参数的后验协方差。
+
+\section{Dirac分布}
+\subsection{定义}
+\begin{definition}[Dirac delta函数]
+Dirac delta函数 $\delta(x)$ 是广义函数，满足以下性质：
+\[
+\int_{-\infty}^{+\infty} \delta(x - x_0)\, dx = 1, \quad \delta(x - x_0) = 0 \text{ 当 } x \neq x_0
+\]
+对于任意连续函数 $f$：
+\[
+\int_{-\infty}^{+\infty} f(x) \delta(x - x_0)\, dx = f(x_0)
+\]
+\end{definition}
+
+\begin{remark}[Dirac分布的意义]
+Dirac分布可视为在 $x_0$ 处概率质量集中的极限情况，常用于表示确定性变量或退化分布。它不是传统意义上的函数，而是一个测度或分布。
+\end{remark}
+
+\subsection{应用}
+\begin{itemize}
+    \item \textbf{经验分布}：给定样本 $\{x_i\}$，经验分布 $\hat{p}(x) = \frac{1}{n}\sum_i \delta(x-x_i)$ 是无偏估计。
+    \item \textbf{确定性策略}：强化学习中，确定性策略 $\pi(a|s) = \delta(a - \mu(s))$。
+\end{itemize}
+
+\subsection{工程易错}
+Dirac函数不是普通函数，不能直接代入概率密度运算，需用积分理解。在编程中常用"硬"赋值实现。
+
+\section{Logistic Sigmoid饱和现象}
+\subsection{饱和定义}
+\begin{definition}[Sigmoid函数]
+Sigmoid函数定义为：
+\[
+\sigma(x) = \frac{1}{1 + e^{-x}}
+\]
+其导数为 $\sigma'(x) = \sigma(x)(1 - \sigma(x))$。
+\end{definition}
+
+\begin{theorem}[Sigmoid的梯度性质]
+\begin{enumerate}
+    \item 最大导数值在 $x = 0$ 处取得：$\sigma'(0) = \sigma(0)(1 - \sigma(0)) = \frac{1}{4}$；
+    \item 当 $|x| \to \infty$ 时，$\sigma'(x) \to 0$（饱和区）。
+\end{enumerate}
+\end{theorem}
+
+\begin{proposition}[梯度消失的量化分析]
+在 $L$ 层深度网络中，若每层激活函数为sigmoid，反向传播梯度：
+\[
+\frac{\partial L}{\partial \bm{W}_1} \propto \prod_{l=1}^{L} \sigma'(\bm{z}_l) \cdot \bm{W}_l
+\]
+假设 $\sigma'(\bm{z}_l) \le 0.25$ 且 $|\bm{W}_l| \le 1$，则梯度以指数速率衰减：$\|\nabla\| \le 0.25^L$。
+\end{proposition}
+
+\subsection{工程对策}
+\begin{itemize}
+    \item 使用ReLU族激活函数，减轻梯度消失。
+    \item 批量归一化使输入保持在非饱和区。
+    \item 在LSTM中，sigmoid用作门控，但通过门结构（加性路径）缓解梯度消失。
+\end{itemize}
+
+\section{softplus函数}
+\subsection{定义}
+\[
+\zeta(x) = \log(1 + e^x)
+\]
+导数 $\zeta'(x) = \sigma(x)$，值域 $(0,\infty)$。
+
+\subsection{数值稳定实现}
+当 $x$ 很大时，$e^x$ 溢出，常用：
+\[
+\zeta(x) = \max(0,x) + \log(1 + e^{-|x|})
+\]
+
+\subsection{应用}
+\begin{itemize}
+    \item 用于保证方差为正（如VAE中输出标准差），比exp更平滑。
+    \item 作为ReLU的平滑近似，但计算量稍大，不常用作激活。
+\end{itemize}
+
+\section{雅可比行列式与概率密度变换}
+\subsection{变量变换公式}
+\begin{theorem}[概率密度变换定理]
+设随机向量 $\bm{x} \in \R^n$ 具有概率密度 $p_{\bm{x}}(\bm{x})$，若 $\bm{y} = g(\bm{x})$ 为可逆光滑映射，则 $\bm{y}$ 的概率密度为：
+\[
+p_{\bm{y}}(\bm{y}) = p_{\bm{x}}(g^{-1}(\bm{y})) \left| \det \frac{\partial g^{-1}(\bm{y})}{\partial \bm{y}} \right| = p_{\bm{x}}(\bm{x}) \left| \det \frac{\partial g(\bm{x})}{\partial \bm{x}} \right|^{-1}
+\]
+其中 $\frac{\partial g}{\partial \bm{x}}$ 为雅可比矩阵。
+\end{theorem}
+
+\begin{proof}[证明要点]
+由概率守恒：$\int_{\Omega_{\bm{y}}} p_{\bm{y}}(\bm{y})\, d\bm{y} = \int_{\Omega_{\bm{x}}} p_{\bm{x}}(\bm{x})\, d\bm{x}$。利用变量替换 $d\bm{y} = \left|\det \frac{\partial g}{\partial \bm{x}}\right| d\bm{x}$，即得结论。
+\end{proof}
+
+\subsection{工程难点}
+高维雅可比行列式计算复杂度为 $O(n^3)$，需设计特殊变换使雅可比矩阵为三角或正交：
+
+\begin{example}[可逆变换设计]
+\begin{itemize}
+    \item \textbf{NICE}：使用加性耦合层 $\bm{y}_1 = \bm{x}_1$，$\bm{y}_2 = \bm{x}_2 + m(\bm{x}_1)$，雅可比行列式为1。
+    \item \textbf{RealNVP}：仿射耦合层 $\bm{y}_1 = \bm{x}_1$，$\bm{y}_2 = \bm{x}_2 \odot e^{s(\bm{x}_1)} + t(\bm{x}_1)$，雅可比为下三角，行列式为对角线乘积。
+    \item \textbf{Glow}：引入可逆1x1卷积（置换矩阵），行列式可高效计算。
+\end{itemize}
+\end{example}
+
+\subsection{前沿：标准化流}
+\begin{definition}[标准化流]
+标准化流（Normalizing Flow）通过堆叠 $K$ 个可逆变换 $g_1, \ldots, g_K$ 将简单分布 $p_0(\bm{x}_0)$（如标准正态）映射为复杂分布：
+\[
+\bm{x}_K = g_K \circ g_{K-1} \circ \cdots \circ g_1(\bm{x}_0)
+\]
+\end{definition}
+
+\begin{theorem}[标准化流的对数似然]
+通过变量变换公式，对数似然可精确计算：
+\[
+\log p_K(\bm{x}_K) = \log p_0(\bm{x}_0) - \sum_{k=1}^{K} \log\left|\det \frac{\partial g_k}{\partial \bm{x}_{k-1}}\right|
+\]
+这使得标准化流可用于最大似然训练。
+\end{theorem}
+
+\section{Softmax与Log-Softmax的数值稳定性}
+\subsection{上溢/下溢问题}
+\begin{remark}[数值问题]
+直接计算 $p_i = \frac{e^{z_i}}{\sum_j e^{z_j}}$ 存在以下问题：
+\begin{itemize}
+    \item \textbf{上溢}：当 $z_i$ 过大时，$e^{z_i} \to \infty$，导致 $\text{inf}/\text{inf} = \text{nan}$；
+    \item \textbf{下溢}：当 $z_i$ 过小时，$e^{z_i} \to 0$，分母可能下溢为0。
+\end{itemize}
+\end{remark}
+
+\subsection{标准技巧}
+\begin{theorem}[Softmax的数值稳定形式]
+设 $m = \max_j z_j$，则：
+\[
+p_i = \frac{e^{z_i - m}}{\sum_j e^{z_j - m}}
+\]
+此形式具有以下性质：
+\begin{enumerate}
+    \item 分母至少为1（最大项贡献 $\frac{e^0}{e^0} = 1$），避免下溢；
+    \item 指数部分非正（$z_i - m \le 0$），避免上溢。
+\end{enumerate}
+\end{theorem}
+
+\begin{corollary}[Log-Softmax的数值稳定形式]
+\[
+\log p_i = z_i - m - \log\sum_j e^{z_j - m}
+\]
+此形式常用于交叉熵损失和NLLLoss的实现中。
+\end{corollary}
+
+\subsection{工程实现}
+PyTorch中 `log_softmax` 和 `softmax` 已内置数值稳定版本。自定义时需注意不要重复减去最大值。
+
+\section{病态条件与条件数}
+\subsection{定义}
+\begin{definition}[条件数]
+矩阵 $\bm{A} \in \R^{n \times n}$ 的条件数定义为：
+\[
+\kappa(\bm{A}) = \|\bm{A}\| \cdot \|\bm{A}^{-1}\|
+\]
+常用的2-范数条件数为：
+\[
+\kappa_2(\bm{A}) = \frac{\sigma_{\max}(\bm{A})}{\sigma_{\min}(\bm{A})}
+\]
+其中 $\sigma_{\max}$ 和 $\sigma_{\min}$ 分别为最大和最小奇异值。
+\end{definition}
+
+\begin{theorem}[条件数的误差放大效应]
+考虑线性系统 $\bm{A}\bm{x} = \bm{b}$，若 $\bm{b}$ 有扰动 $\delta \bm{b}$，则解的相对误差满足：
+\[
+\frac{\|\delta \bm{x}\|}{\|\bm{x}\|} \le \kappa(\bm{A}) \frac{\|\delta \bm{b}\|}{\|\bm{b}\|}
+\]
+\end{theorem}
+
+\begin{theorem}[条件数与优化收敛速度]
+在凸优化中，设Hessian矩阵 $\bm{H}$ 的条件数为 $\kappa$，则梯度下降的收敛速度为：
+\[
+f(\bm{x}_k) - f(\bm{x}^*) \le \left(\frac{\kappa - 1}{\kappa + 1}\right)^{2k} (f(\bm{x}_0) - f(\bm{x}^*))
+\]
+条件数越大，收敛越慢（呈锯齿状震荡）。
+\end{theorem}
+
+\subsection{工程对策}
+\begin{itemize}
+    \item 预处理（preconditioning）：如使用Jacobian预处理器、RMSProp/Adam等自适应方法隐式调节。
+    \item 在网络中，批归一化可改善Hessian的条件数。
+\end{itemize}
+
+\section{牛顿法原理}
+\subsection{推导}
+\begin{theorem}[牛顿法迭代公式]
+对目标函数 $f(\bm{x})$ 在当前点 $\bm{x}_k$ 处作二阶泰勒展开：
+\[
+f(\bm{x}) \approx f(\bm{x}_k) + \nabla f(\bm{x}_k)^T (\bm{x} - \bm{x}_k) + \frac{1}{2} (\bm{x} - \bm{x}_k)^T \bm{H}_k (\bm{x} - \bm{x}_k)
+\]
+其中 $\bm{H}_k = \nabla^2 f(\bm{x}_k)$ 为Hessian矩阵。令梯度为零得牛顿更新：
+\[
+\bm{x}_{k+1} = \bm{x}_k - \bm{H}_k^{-1} \nabla f(\bm{x}_k)
+\]
+\end{theorem}
+
+\begin{remark}[牛顿法的几何解释]
+牛顿法在每一步用一个二次函数近似原目标函数，并直接跳到该二次函数的最小点。因此，牛顿法是一种二阶方法，利用了曲率信息。
+\end{remark}
+
+\subsection{收敛性}
+\begin{theorem}[牛顿法的局部收敛速度]
+设 $f$ 在最优解 $\bm{x}^*$ 附近二阶连续可微，Hessian在 $\bm{x}^*$ 处正定，则牛顿法具有局部二次收敛速度：
+\[
+\|\bm{x}_{k+1} - \bm{x}^*\| \le C \|\bm{x}_k - \bm{x}^*\|^2
+\]
+其中 $C$ 为与 $f$ 二阶导数Lipschitz常数相关的常数。
+\end{theorem}
+
+\begin{remark}
+二次收敛意味着接近最优时，每次迭代有效位数翻倍。例如，若当前误差为 $10^{-2}$，下一步误差约为 $10^{-4}$，再下一步约为 $10^{-8}$。
+\end{remark}
+
+\subsection{工程难点与改进}
+\begin{itemize}
+    \item Hessian计算和求逆代价高（$O(n^3)$），深度学习参数巨大无法直接使用。
+    \item Hessian可能不正定，导致更新方向非下降。可用修正牛顿法（如加正则化）。
+    \item 拟牛顿法（BFGS、L-BFGS）用梯度差近似Hessian，在中等规模问题上有效。
+    \item 自然梯度法利用Fisher信息矩阵作为Hessian近似，用于神经网络。
+\end{itemize}
+
+\section{KKT条件}
+\subsection{一般形式}
+\begin{definition}[约束优化问题]
+考虑一般约束优化问题：
+\[
+\min_{\bm{x}} f(\bm{x}),\quad \text{s.t. } g_i(\bm{x}) \le 0\ (i=1,\ldots,m),\ h_j(\bm{x}) = 0\ (j=1,\ldots,p)
+\]
+\end{definition}
+
+\begin{definition}[拉格朗日函数]
+拉格朗日函数定义为：
+\[
+\mathcal{L}(\bm{x},\bm{\lambda},\bm{\nu}) = f(\bm{x}) + \sum_{i=1}^{m} \lambda_i g_i(\bm{x}) + \sum_{j=1}^{p} \nu_j h_j(\bm{x})
+\]
+其中 $\bm{\lambda} \ge 0$ 和 $\bm{\nu}$ 为拉格朗日乘子。
+\end{definition}
+
+\begin{theorem}[KKT必要条件]
+在适当约束规格下（如Slater条件），若 $\bm{x}^*$ 为局部最优解，则存在乘子 $\bm{\lambda}^*, \bm{\nu}^*$ 满足：
+\begin{align}
+    \nabla_{\bm{x}} \mathcal{L}(\bm{x}^*, \bm{\lambda}^*, \bm{\nu}^*) &= 0 \quad \text{(平稳性)} \label{eq:stationarity}\\
+    \lambda_i^* g_i(\bm{x}^*) &= 0,\ \forall i \quad \text{(互补松弛)} \label{eq:complementarity}\\
+    g_i(\bm{x}^*) &\le 0,\ \forall i \quad \text{(原始可行)} \label{eq:primal}\\
+    h_j(\bm{x}^*) &= 0,\ \forall j \quad \text{(等式约束可行)} \label{eq:equality}\\
+    \lambda_i^* &\ge 0,\ \forall i \quad \text{(对偶可行)} \label{eq:dual}
+\end{align}
+\end{theorem}
+
+\subsection{几何意义}
+\begin{remark}[互补松弛的几何解释]
+互补松弛条件 $\lambda_i^* g_i(\bm{x}^*) = 0$ 意味着：
+\begin{itemize}
+    \item 若约束 $g_i$ 未激活（$g_i(\bm{x}^*) < 0$），则乘子 $\lambda_i^* = 0$；
+    \item 若乘子 $\lambda_i^* > 0$，则约束激活（$g_i(\bm{x}^*) = 0$，在边界上）。
+\end{itemize}
+只有激活的不等式约束才会影响最优解。
+\end{remark}
+
+\begin{remark}[平稳性的几何解释]
+平稳性条件 $\nabla f(\bm{x}^*) + \sum_i \lambda_i^* \nabla g_i(\bm{x}^*) + \sum_j \nu_j^* \nabla h_j(\bm{x}^*) = 0$ 表明：在最优点，目标函数梯度可表示为约束梯度的非负线性组合（对于不等式约束）。
+\end{remark}
+
+\subsection{工程应用}
+\begin{itemize}
+    \item SVM的推导中，支持向量对应 $\lambda_i>0$ 的样本。
+    \item 在神经网络中，约束优化（如权重衰减、梯度裁剪）可视为拉格朗日形式。
+\end{itemize}
+
+\section{VC维}
+\subsection{定义}
+\begin{definition}[打散与VC维]
+\begin{itemize}
+    \item \textbf{打散}：设假设空间 $\mathcal{H}$ 和样本集 $S = \{\bm{x}_1, \ldots, \bm{x}_n\}$，若对任意标签分配 $(y_1, \ldots, y_n) \in \{-1, +1\}^n$，都存在 $h \in \mathcal{H}$ 使得 $h(\bm{x}_i) = y_i$ 对所有 $i$ 成立，则称 $\mathcal{H}$ 打散 $S$。
+    \item \textbf{VC维}：$\text{VCdim}(\mathcal{H})$ 定义为 $\mathcal{H}$ 能够打散的最大样本数。
+\end{itemize}
+\end{definition}
+
+\begin{example}[常见假设空间的VC维]
+\begin{itemize}
+    \item $\R^d$ 中的线性分类器：$\text{VCdim} = d + 1$；
+    \item $\R^2$ 中的轴对齐矩形：$\text{VCdim} = 4$；
+    \item 正弦函数族 $\{\sin(\omega x) : \omega > 0\}$：$\text{VCdim} = \infty$（可打散任意有限点集）。
+\end{itemize}
+\end{example}
+
+\subsection{泛化理论}
+\begin{theorem}[VC维泛化误差界]
+设 $\mathcal{H}$ 的VC维为 $d$，样本数为 $n$，则以概率至少 $1 - \delta$，对所有 $h \in \mathcal{H}$：
+\[
+R(h) \le \hat{R}(h) + \sqrt{\frac{d(\log(2n/d) + 1) + \log(4/\delta)}{n}}
+\]
+其中 $R(h)$ 为期望风险，$\hat{R}(h)$ 为经验风险。
+\end{theorem}
+
+\subsection{深度学习悖论}
+\begin{remark}[VC维的局限]
+现代深度网络参数量远超样本数，按传统VC理论应严重过拟合，但实际泛化良好。这表明：
+\begin{enumerate}
+    \item VC维可能过于悲观，只考虑了假设空间的理论容量；
+    \item 训练过程（如SGD）隐式施加了正则化，偏好某些特定解；
+    \item 深度网络的有效容量可能远小于参数量。
+\end{enumerate}
+\end{remark}
+
+\subsection{前沿复杂度度量}
+\begin{itemize}
+    \item \textbf{范数约束}：如谱范数 $\|\bm{W}\|_2$，用于分析深度网络的Lipschitz常数；
+    \item \textbf{PAC-Bayes边界}：考虑参数分布而非单点估计，可得到更紧的泛化界；
+    \item \textbf{锐度（Sharpness）}：损失景观在最优解附近的曲率，平坦最小值泛化更好；
+    \item \textbf{Rademacher复杂度}：直接刻画假设空间在数据上的拟合能力。
+\end{itemize}
+
+\section{k折交叉验证}
+\subsection{方法}
+将数据随机分成 $k$ 份（通常 $k=5$ 或 $10$），轮流用 $k-1$ 份训练，1份验证，取 $k$ 次验证指标的平均。
+
+\subsection{选择 $k$ 的考量}
+\begin{itemize}
+    \item 大 $k$：训练集更大，模型偏差小，但计算量大，且验证集重叠导致方差大。
+    \item 小 $k$：反之。经验上 $k=5$ 或 $10$ 折中。
+\end{itemize}
+
+\subsection{工程易错}
+\begin{itemize}
+    \item 时间序列数据需用前向链（rolling window）避免未来信息泄露。
+    \item 超参数调优后需在独立测试集上评估，否则信息泄露导致乐观估计。
+\end{itemize}
+
+\subsection{前沿}
+深度学习通常只用单次验证（因计算昂贵），但在小数据集或AutoML中仍用交叉验证。
+
+\section{最大后验估计}
+\subsection{定义}
+\begin{definition}[MAP估计]
+在贝叶斯框架中，给定数据 $\mathcal{D}$ 和参数先验 $p(\bm{\theta})$，最大后验估计为：
+\[
+\bm{\theta}_{\text{MAP}} = \arg\max_{\bm{\theta}} p(\bm{\theta}|\mathcal{D}) = \arg\max_{\bm{\theta}} \left( \log p(\mathcal{D}|\bm{\theta}) + \log p(\bm{\theta}) \right)
+\]
+\end{definition}
+
+\begin{remark}[MAP与MLE的关系]
+\begin{itemize}
+    \item MLE（最大似然估计）：$\bm{\theta}_{\text{MLE}} = \arg\max_{\bm{\theta}} \log p(\mathcal{D}|\bm{\theta})$，无先验；
+    \item MAP在MLE基础上添加先验项 $\log p(\bm{\theta})$，起到正则化作用；
+    \item 当 $p(\bm{\theta})$ 为均匀分布（无信息先验）时，MAP退化为MLE。
+\end{itemize}
+\end{remark}
+
+\subsection{与正则化的关系}
+\begin{theorem}[先验与正则化的对应关系]
+\begin{enumerate}
+    \item 高斯先验 $\bm{\theta} \sim \mathcal{N}(\bm{0}, \sigma^2\bm{I})$ 对应L2正则化：
+    \[
+    \log p(\bm{\theta}) = -\frac{1}{2\sigma^2}\|\bm{\theta}\|_2^2 + \text{const}
+    \]
+    \item Laplace先验 $\bm{\theta}_j \sim \text{Laplace}(0, b)$ 对应L1正则化：
+    \[
+    \log p(\bm{\theta}) = -\frac{1}{b}\|\bm{\theta}\|_1 + \text{const}
+    \]
+    L1正则化产生稀疏解，可用于特征选择。
+\end{enumerate}
+\end{theorem}
+
+\subsection{工程易错}
+\begin{itemize}
+    \item MAP仅是点估计，无法量化不确定性。
+    \item 先验的尺度参数（如正则化系数）需通过交叉验证选择。
+\end{itemize}
+
+\subsection{前沿}
+在贝叶斯神经网络中，MAP训练（即常规训练）常用，但为了不确定性估计需近似后验（如变分推断、MC Dropout）。
+
+\section{支持向量机}
+\subsection{原始问题与对偶}
+\begin{definition}[线性可分SVM原始问题]
+寻找最大间隔超平面：
+\[
+\min_{\bm{w},b} \frac{1}{2}\|\bm{w}\|^2,\quad \text{s.t. } y_i(\bm{w}^T\bm{x}_i + b) \ge 1,\ \forall i
+\]
+\end{definition}
+
+\begin{theorem}[SVM对偶问题]
+原始问题的拉格朗日对偶为：
+\[
+\max_{\bm{\alpha}} \sum_{i=1}^{n} \alpha_i - \frac{1}{2}\sum_{i,j=1}^{n} \alpha_i \alpha_j y_i y_j \bm{x}_i^T \bm{x}_j,\quad \text{s.t. } \alpha_i \ge 0,\ \sum_{i=1}^{n} \alpha_i y_i = 0
+\]
+\end{theorem}
+
+\begin{theorem}[SVM分类器]
+最优分类器为：
+\[
+f(\bm{x}) = \operatorname{sign}\left(\sum_{i=1}^{n} \alpha_i^* y_i \bm{x}_i^T \bm{x} + b^*\right)
+\]
+支持向量为 $\alpha_i^* > 0$ 的样本，只有支持向量影响决策边界。
+\end{theorem}
+
+\subsection{核技巧}
+\begin{definition}[核函数]
+核函数 $k: \mathcal{X} \times \mathcal{X} \to \R$ 是满足Mercer条件的对称函数，可表示为某个特征映射 $\phi$ 的内积：
+\[
+k(\bm{x}_i, \bm{x}_j) = \langle \phi(\bm{x}_i), \phi(\bm{x}_j) \rangle
+\]
+\end{definition}
+
+\begin{theorem}[核化SVM]
+在SVM对偶问题中，将内积 $\bm{x}_i^T \bm{x}_j$ 替换为核函数 $k(\bm{x}_i, \bm{x}_j)$，即可在特征空间中学习线性分类器，等价于原空间中的非线性分类器。
+\end{theorem}
+
+\begin{example}[常用核函数]
+\begin{itemize}
+    \item 线性核：$k(\bm{x}, \bm{x}') = \bm{x}^T \bm{x}'$；
+    \item 多项式核：$k(\bm{x}, \bm{x}') = (\bm{x}^T \bm{x}' + c)^d$；
+    \item RBF核（高斯核）：$k(\bm{x}, \bm{x}') = \exp\left(-\frac{\|\bm{x} - \bm{x}'\|^2}{2\sigma^2}\right)$。
+\end{itemize}
+\end{example}
+
+\subsection{工程易错}
+\begin{itemize}
+    \item 软间隔SVM引入松弛变量 $\xi_i$ 和惩罚参数 $C$，对偶中 $0 \le \alpha_i \le C$。
+    \item SVM输出为距离，需通过Platt缩放（用sigmoid拟合）转换为概率。
+    \item 核函数需满足Mercer条件，常见选择：线性核、多项式核、RBF核。
+\end{itemize}
+
+\subsection{前沿}
+深度学习时代，SVM仍用于小样本场景，或作为神经网络顶层分类器（用预训练特征）。此外，SVM的hinge损失也被用于深度网络的目标函数，如Crammer-Singer多分类SVM。
+
+\section{K-均值聚类}
+\subsection{算法}
+\begin{definition}[K-均值目标函数]
+给定数据集 $\{\bm{x}_1, \ldots, \bm{x}_n\}$，K-均值聚类最小化簇内平方和：
+\[
+J = \min_{\{C_1, \ldots, C_k\}} \sum_{j=1}^k \sum_{\bm{x} \in C_j} \|\bm{x} - \bm{\mu}_j\|^2
+\]
+其中 $\bm{\mu}_j = \frac{1}{|C_j|}\sum_{\bm{x} \in C_j} \bm{x}$ 为簇 $C_j$ 的中心。
+\end{definition}
+
+\begin{theorem}[K-均值的交替优化]
+K-均值算法交替执行以下两步：
+\begin{enumerate}
+    \item \textbf{分配步骤}：固定中心，将每个样本分配到最近的簇：
+    \[
+    C_j^{(t)} = \{\bm{x}_i : \|\bm{x}_i - \bm{\mu}_j^{(t)}\| \le \|\bm{x}_i - \bm{\mu}_l^{(t)}\|, \forall l \neq j\}
+    \]
+    \item \textbf{更新步骤}：固定分配，更新中心：
+    \[
+    \bm{\mu}_j^{(t+1)} = \frac{1}{|C_j^{(t)}|} \sum_{\bm{x} \in C_j^{(t)}} \bm{x}
+    \]
+\end{enumerate}
+每步都使目标函数非增，故算法收敛到局部最优。
+\end{theorem}
+
+\subsection{工程易错}
+\begin{itemize}
+    \item 初始化敏感：常用k-means++（选择离已有中心远的点作为新中心）。
+    \item 需预设 $k$，可用肘部法则、轮廓系数等选择。
+    \item 假设簇为凸形，对非球形簇效果差，可用谱聚类或高斯混合模型。
+    \item 可能收敛到局部最优，应多次运行取最佳。
+\end{itemize}
+
+\subsection{前沿}
+\begin{itemize}
+    \item 深度聚类：结合自编码器提取特征再聚类，或端到端联合优化（如DEC）。
+    \item 在自监督学习中，k-means用于生成伪标签（如SwAV）。
+\end{itemize}
+
+\section{局部核、流形假设与流形学习}
+\subsection{局部核}
+\begin{definition}[局部核]
+局部核是指核值随输入距离增大而衰减的核函数。典型例子是高斯核（RBF核）：
+\[
+k(\bm{x}, \bm{x}') = \exp\left(-\frac{\|\bm{x} - \bm{x}'\|^2}{2\sigma^2}\right)
+\]
+当 $\|\bm{x} - \bm{x}'\| \to \infty$ 时，$k(\bm{x}, \bm{x}') \to 0$，体现局部平滑先验。
+\end{definition}
+
+\subsection{流形假设}
+\begin{definition}[流形假设]
+流形假设认为：高维观测数据实际位于或接近某个嵌入在高维空间的低维流形上。形式化地，设数据空间为 $\R^D$，存在低维流形 $\mathcal{M}$（维度 $d \ll D$），使得数据点 $\bm{x} \approx \bm{m}$，$\bm{m} \in \mathcal{M}$。
+\end{definition}
+
+\begin{remark}[流形假设的意义]
+\begin{itemize}
+    \item 解释了为什么高维数据中存在大量冗余和相关性；
+    \item 为降维和特征学习提供理论基础；
+    \item 深度网络的表示学习可视为学习数据的流形结构。
+\end{itemize}
+\end{remark}
+
+\subsection{流形学习算法}
+\begin{example}[经典流形学习方法]
+\begin{itemize}
+    \item \textbf{LLE（局部线性嵌入）}：假设每个数据点可由邻居线性重构，保持重构系数。设 $\bm{x}_i = \sum_{j \in \mathcal{N}(i)} w_{ij} \bm{x}_j$，则嵌入 $\bm{y}_i$ 满足 $\bm{y}_i = \sum_{j \in \mathcal{N}(i)} w_{ij} \bm{y}_j$。
+    \item \textbf{Isomap}：用测地距离替代欧氏距离，保持全局流形结构。通过构建邻接图并计算最短路径来估计测地距离。
+    \item \textbf{t-SNE}：将高维相似度映射为低维t分布相似度，用于可视化。目标是最小化KL散度：
+    \[
+    \text{KL}(P\|Q) = \sum_{i \neq j} p_{ij} \log \frac{p_{ij}}{q_{ij}}
+    \]
+\end{itemize}
+\end{example}
+
+\subsection{工程易错}
+\begin{itemize}
+    \item 流形学习对噪声敏感，需预处理。
+    \item t-SNE计算复杂度高，适用于小样本可视化；近年有UMAP等改进。
+\end{itemize}
+
+\subsection{前沿与深度学习}
+\begin{remark}[深度学习与流形]
+\begin{itemize}
+    \item \textbf{深度自编码器}：通过瓶颈层强制学习低维表示，隐式学习数据的流形结构；
+    \item \textbf{生成对抗网络（GAN）}：生成样本位于学习到的流形上，判别器学习区分真实流形和生成流形；
+    \item \textbf{流形正则化}：在半监督学习中，利用流形假设添加平滑性约束，如拉普拉斯正则化：
+    \[
+    \mathcal{R} = \sum_{i,j} w_{ij} \|f(\bm{x}_i) - f(\bm{x}_j)\|^2
+    \]
+    其中 $w_{ij}$ 为样本相似度；
+    \item \textbf{神经流形假设}：神经网络内部表示位于低维流形上，可用于解释泛化和指导模型压缩。
+\end{itemize}
+\end{remark}
+
+
+
+\end{document}
